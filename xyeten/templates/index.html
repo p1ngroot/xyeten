@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>RPi4 Multitool</title>
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--card:#12121a;--border:#1e1e2e;
+  --accent:#00ff88;--accent2:#00ccff;--danger:#ff3355;
+  --text:#e0e0e0;--dim:#666;--warn:#ffaa00
+}
+body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;
+  font-size:14px;min-height:100vh;padding-bottom:80px}
+.topbar{background:#000;border-bottom:1px solid var(--accent);padding:10px 16px;
+  display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:99}
+.topbar h1{font-size:16px;color:var(--accent);letter-spacing:2px}
+.status{display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.dot.off{background:var(--danger);animation:none}
+
+.nav{display:flex;overflow-x:auto;gap:6px;padding:10px 12px;background:#08080d;
+  border-bottom:1px solid var(--border)}
+.nav button{flex-shrink:0;padding:6px 12px;background:var(--card);border:1px solid var(--border);
+  color:var(--dim);border-radius:20px;font-family:inherit;font-size:11px;cursor:pointer;
+  transition:all .2s;white-space:nowrap}
+.nav button.active{color:var(--accent);border-color:var(--accent)}
+
+.panel{padding:12px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;
+  padding:14px;margin-bottom:10px}
+.card h2{font-size:14px;color:var(--accent);margin-bottom:8px}
+
+.btn{display:inline-block;padding:10px 24px;border:1px solid var(--accent);
+  background:transparent;color:var(--accent);border-radius:8px;font-family:inherit;
+  font-size:13px;cursor:pointer;transition:all .2s;margin:4px}
+.btn:hover{background:var(--accent);color:#000}
+.btn.danger{border-color:var(--danger);color:var(--danger)}
+.btn.danger:hover{background:var(--danger);color:#fff}
+.btn.running{background:var(--danger);color:#fff;border-color:var(--danger);
+  animation:glow 1s infinite alternate}
+@keyframes glow{from{box-shadow:0 0 5px var(--danger)}to{box-shadow:0 0 20px var(--danger)}}
+
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+.stat{background:#0a0a12;border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center}
+.stat .val{font-size:22px;font-weight:bold;color:var(--accent2)}
+.stat .lbl{font-size:10px;color:var(--dim);margin-top:2px}
+
+.list{max-height:300px;overflow-y:auto;margin:8px 0}
+.list-item{display:flex;justify-content:space-between;align-items:center;
+  padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;
+  cursor:pointer;transition:background .2s}
+.list-item:hover{background:rgba(0,255,136,.05)}
+.list-item.selected{background:rgba(0,255,136,.1);border-left:3px solid var(--accent)}
+
+.hidden{display:none!important}
+
+.slider-row{display:flex;align-items:center;gap:10px;margin:8px 0}
+.slider-row label{font-size:12px;color:var(--dim)}
+.slider-row input[type=range]{flex:1;accent-color:var(--accent)}
+.slider-row .val-display{color:var(--accent);font-weight:bold;min-width:60px}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>⚡ RPi4 TOOL</h1>
+  <div class="status">
+    <span class="dot" id="wsDot"></span>
+    <span id="wsStatus">--</span>
+  </div>
+</div>
+
+<div class="nav" id="navBar"></div>
+
+<div class="panel" id="p_home">
+  <div class="card">
+    <h2>🎛️ Raspberry Pi 4 Multitool</h2>
+    <p style="color:var(--dim);font-size:12px;margin-bottom:12px">
+      5GHz WiFi Jammer + Web Interface<br>
+      GPIO кнопки: GPIO17=NAV, GPIO27=ACT
+    </p>
+    <div class="stat-grid">
+      <div class="stat"><div class="val" id="qs_module">Home</div><div class="lbl">Module</div></div>
+      <div class="stat"><div class="val" id="qs_status">Idle</div><div class="lbl">Status</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel hidden" id="p_scan">
+  <div class="card">
+    <h2>📡 WiFi Scanner (5GHz)</h2>
+    <button class="btn" onclick="doScan()">▶ Scan Networks</button>
+    <div class="list" id="scanList"></div>
+  </div>
+</div>
+
+<div class="panel hidden" id="p_sniffer">
+  <div class="card">
+    <h2>👁️ WiFi Sniffer</h2>
+    <button class="btn" id="btnSniff" onclick="toggleModule(2)">▶ Start</button>
+    <div class="slider-row">
+      <label>Channel:</label>
+      <input type="range" min="36" max="165" step="4" value="36" id="sniffCh" 
+        oninput="setChannel(this.value)">
+      <span class="val-display" id="sniffChVal">36</span>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><div class="val" id="sn_total">0</div><div class="lbl">Total</div></div>
+      <div class="stat"><div class="val" id="sn_mgmt">0</div><div class="lbl">Mgmt</div></div>
+      <div class="stat"><div class="val" id="sn_data">0</div><div class="lbl">Data</div></div>
+      <div class="stat"><div class="val" id="sn_ctrl">0</div><div class="lbl">Ctrl</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel hidden" id="p_deauth">
+  <div class="card">
+    <h2>⚡ WiFi Deauth</h2>
+    <button class="btn" onclick="doScan()">1. Scan Targets</button>
+    <div class="list" id="deauthList"></div>
+    <button class="btn danger" id="btnDeauth" onclick="toggleModule(3)">▶ Start Deauth</button>
+    <div class="stat-grid">
+      <div class="stat"><div class="val" id="da_sent">0</div><div class="lbl">Frames Sent</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel hidden" id="p_beacon">
+  <div class="card">
+    <h2>📢 Beacon Flood</h2>
+    <button class="btn" id="btnBeacon" onclick="toggleModule(4)">▶ Start Flood</button>
+    <div class="stat-grid">
+      <div class="stat"><div class="val" id="bc_sent">0</div><div class="lbl">Beacons Sent</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel hidden" id="p_jammer">
+  <div class="card">
+    <h2>⚠️ 5GHz Jammer</h2>
+    <p style="font-size:11px;color:var(--warn);margin-bottom:8px">
+      ⚠️ ВНИМАНИЕ: Глушение WiFi незаконно в большинстве стран!
+    </p>
+    <button class="btn danger" id="btnJammer" onclick="toggleModule(6)">▶ Start Jammer</button>
+    <div class="slider-row">
+      <label>Channel:</label>
+      <input type="range" min="36" max="165" step="4" value="36" id="jamCh" 
+        oninput="setJamChannel(this.value)">
+      <span class="val-display" id="jamChVal">36 (5180MHz)</span>
+    </div>
+  </div>
+</div>
+
+<script>
+let socket;
+let currentModule = 0;
+let moduleRunning = false;
+let selectedTarget = -1;
+
+const modules = ['home', 'scan', 'sniffer', 'deauth', 'beacon', 'probe', 'jammer', 'sysinfo'];
+const moduleNames = ['Home', 'WiFi Scan', 'Sniffer', 'Deauth', 'Beacon', 'Probe', '5GHz Jammer', 'SysInfo'];
+
+function initUI() {
+  const nav = document.getElementById('navBar');
+  modules.forEach((m, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = moduleNames[i];
+    btn.onclick = () => switchPanel(i);
+    if (i === 0) btn.classList.add('active');
+    nav.appendChild(btn);
+  });
+}
+
+function switchPanel(idx) {
+  currentModule = idx;
+  modules.forEach((m, i) => {
+    const panel = document.getElementById('p_' + m);
+    if (panel) panel.classList.toggle('hidden', i !== idx);
+  });
+  document.querySelectorAll('.nav button').forEach((b, i) => {
+    b.classList.toggle('active', i === idx);
+  });
+}
+
+function connectWS() {
+  socket = io();
+  
+  socket.on('connect', () => {
+    document.getElementById('wsDot').classList.remove('off');
+    document.getElementById('wsStatus').textContent = 'Connected';
+  });
+  
+  socket.on('disconnect', () => {
+    document.getElementById('wsDot').classList.add('off');
+    document.getElementById('wsStatus').textContent = 'Disconnected';
+  });
+  
+  socket.on('module_state', (data) => {
+    moduleRunning = data.running;
+    document.getElementById('qs_module').textContent = data.name;
+    document.getElementById('qs_status').textContent = data.running ? 'Running' : 'Idle';
+    updateButtons();
+  });
+  
+  socket.on('wifi_scan', (data) => {
+    renderNetworks(data.nets);
+  });
+  
+  socket.on('sniffer_stats', (data) => {
+    document.getElementById('sn_total').textContent = data.total;
+    document.getElementById('sn_mgmt').textContent = data.mgmt;
+    document.getElementById('sn_data').textContent = data.data;
+    document.getElementById('sn_ctrl').textContent = data.ctrl;
+  });
+  
+  socket.on('deauth_stats', (data) => {
+    document.getElementById('da_sent').textContent = data.sent;
+  });
+  
+  socket.on('beacon_stats', (data) => {
+    document.getElementById('bc_sent').textContent = data.sent;
+  });
+}
+
+function updateButtons() {
+  const btns = {
+    2: 'btnSniff',
+    3: 'btnDeauth',
+    4: 'btnBeacon',
+    6: 'btnJammer'
+  };
+  
+  Object.entries(btns).forEach(([mod, btnId]) => {
+    const btn = document.getElementById(btnId);
+    if (btn) {
+      const isRunning = moduleRunning && currentModule == mod;
+      btn.textContent = isRunning ? '⏹ Stop' : '▶ Start';
+      btn.classList.toggle('running', isRunning);
+    }
+  });
+}
+
+function renderNetworks(nets) {
+  ['scanList', 'deauthList'].forEach(listId => {
+    const list = document.getElementById(listId);
+    if (!list) return;
+    list.innerHTML = '';
+    nets.forEach((n, i) => {
+      const item = document.createElement('div');
+      item.className = 'list-item' + (selectedTarget === i ? ' selected' : '');
+      item.innerHTML = `<span>${n.ssid}</span><span style="color:var(--dim)">${n.channel} | ${n.rssi}dB</span>`;
+      if (listId === 'deauthList') {
+        item.onclick = () => {
+          selectedTarget = i;
+          socket.emit('command', {cmd: 'set_target', target: i});
+          renderNetworks(nets);
+        };
+      }
+      list.appendChild(item);
+    });
+  });
+}
+
+function doScan() {
+  socket.emit('command', {cmd: 'scan'});
+}
+
+function toggleModule(modId) {
+  if (moduleRunning && currentModule === modId) {
+    socket.emit('command', {cmd: 'stop'});
+  } else {
+    socket.emit('command', {cmd: 'start', module: modId});
+  }
+}
+
+function setChannel(ch) {
+  document.getElementById('sniffChVal').textContent = ch;
+  socket.emit('command', {cmd: 'set_channel', channel: parseInt(ch)});
+}
+
+function setJamChannel(ch) {
+  const freq = 5000 + (parseInt(ch) * 5);
+  document.getElementById('jamChVal').textContent = `${ch} (${freq}MHz)`;
+  socket.emit('command', {cmd: 'set_channel', channel: parseInt(ch)});
+}
+
+initUI();
+connectWS();
+</script>
+</body>
+</html>
