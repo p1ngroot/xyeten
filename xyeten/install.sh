@@ -29,8 +29,10 @@ pip3 install -r requirements.txt
 echo "[4/7] Создание директории приложения..."
 mkdir -p /opt/rpi-multitool
 cp rpi_multitool.py /opt/rpi-multitool/
+cp rpi_multitool_tui.py /opt/rpi-multitool/
 cp -r templates /opt/rpi-multitool/
 chmod +x /opt/rpi-multitool/rpi_multitool.py
+chmod +x /opt/rpi-multitool/rpi_multitool_tui.py
 
 echo "[5/7] Установка systemd сервиса..."
 cp rpi-multitool.service /etc/systemd/system/

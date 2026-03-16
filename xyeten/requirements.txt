@@ -3,3 +3,4 @@ flask-socketio==5.3.5
 scapy==2.5.0
 python-socketio==5.10.0
 RPi.GPIO==0.7.1
+rich==13.7.0
